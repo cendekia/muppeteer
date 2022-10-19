@@ -1,5 +1,7 @@
 import express from "express"
 import puppeteer from "puppeteer"
+import * as dotenv from 'dotenv'
+dotenv.config()
 import environments from "./utils/environments"
 import { ScreenshotOptions } from "puppeteer"
 

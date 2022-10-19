@@ -6,7 +6,8 @@
   "scripts": {
     "dev": "nodemon ./dist/index.js",
     "lint": "eslint . --ext .ts",
-    "build:watch": "rm -rf dist && tsc --watch"
+    "build:watch": "rm -rf dist && tsc --watch",
+    "build": "rm -rf dist && tsc"
   },
   "author": "cendekia",
   "license": "ISC",

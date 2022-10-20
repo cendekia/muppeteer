@@ -1,6 +1,6 @@
 import express from "express"
 import puppeteer from "puppeteer"
-import * as dotenv from 'dotenv'
+import * as dotenv from "dotenv"
 dotenv.config()
 import environments from "./utils/environments"
 import { ScreenshotOptions } from "puppeteer"
@@ -87,7 +87,7 @@ app.get("/image", async (request, response) => {
       x: number
       y: number
     }
-    let boundingBox = <BoundingBox> await elem?.boundingBox()
+    let boundingBox = <BoundingBox>await elem?.boundingBox()
 
     interface Viewport {
       width: number
@@ -96,14 +96,14 @@ app.get("/image", async (request, response) => {
 
     await webPage.setViewport(<Viewport>{
       width: 1056,
-      height: boundingBox.height,
+      height: Math.floor(boundingBox.height),
     })
 
     boundingBox = {
       width: 1056,
       height: boundingBox.height,
       x: boundingBox.x,
-      y: boundingBox.y
+      y: boundingBox.y,
     }
 
     console.log(boundingBox)

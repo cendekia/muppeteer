@@ -101,7 +101,7 @@ app.get("/image", async (request, response) => {
 
     boundingBox = {
       width: 1056,
-      height: boundingBox.height,
+      height: Math.floor(boundingBox.height),
       x: boundingBox.x,
       y: boundingBox.y,
     }

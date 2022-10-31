@@ -28,3 +28,8 @@ Contributions are always welcome!
 See `contributing.md` for ways to get started.
 
 Please adhere to this project's `code of conduct`.
+
+## Contributors
+
+- [@dicka88](https://www.github.com/dicka88)
+- [@Hanivan](https://www.github.com/Hanivan)

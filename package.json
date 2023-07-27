@@ -12,7 +12,8 @@
     "ts": "tsc --noEmit --incremental",
     "build:watch": "rm -rf dist && tsc --watch",
     "build": "rm -rf dist && tsc",
-    "prepare": "husky install"
+    "prepare": "husky install",
+    "start": "node dist/index.js"
   },
   "author": "cendekia",
   "license": "ISC",

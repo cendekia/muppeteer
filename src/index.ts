@@ -33,6 +33,11 @@ app.get("/pdf", async (request, response) => {
     })
     .catch((err) => console.log("error loading url", err))
 
+  await webPage.waitForNetworkIdle();
+
+  // wait by blocking execution flow
+  await new Promise((resolve) => setTimeout(resolve, 5000))
+
   const pdf = await webPage.pdf({
     printBackground: true,
     format: "Tabloid",
@@ -79,6 +84,11 @@ app.get("/image", async (request, response) => {
       })
       .catch((err) => console.log("error loading url", err))
 
+    await webPage.waitForNetworkIdle();
+
+    // wait by blocking execution flow
+    await new Promise((resolve) => setTimeout(resolve, 5000))
+    
     const elem = await webPage.$("body")
 
     interface BoundingBox {
@@ -106,7 +116,6 @@ app.get("/image", async (request, response) => {
       y: boundingBox.y,
     }
 
-    console.log(boundingBox)
     const png = await webPage.screenshot(<ScreenshotOptions>{
       captureBeyondViewport: true,
       fromSurface: true,

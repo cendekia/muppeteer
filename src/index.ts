@@ -5,8 +5,11 @@ dotenv.config()
 import environments from "./utils/environments"
 import { ScreenshotOptions } from "puppeteer"
 import { PaperFormat } from "puppeteer"
+import cors from 'cors';
 
 const app = express()
+
+app.use(cors({ origin: '*' }));
 
 app.get("/", (request, response) => {
   response.json({ message: "Hello Elmo!" })

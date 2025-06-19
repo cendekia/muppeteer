@@ -89,10 +89,10 @@ app.get("/pdf", async (request, response) => {
 app.get("/image", async (request, response) => {
   const url: string = request.query.url as string
   const type: string = request.query.type as string
-  const types = ["png", "jpeg", "webp"]
+  const types = ["png", "jpeg", "webp", "svg"]
 
   if (!types.includes(type)) {
-    response.status(400).json({ message: "Supported types are png, jpeg or webp" });
+    response.status(400).json({ message: "Supported types are png, jpeg, webp or svg" });
     return;
   }
 
@@ -152,14 +152,67 @@ app.get("/image", async (request, response) => {
     // delay to allow the page to render
     await new Promise((resolve) => setTimeout(resolve, 5000))
 
-    const png = await webPage.screenshot(<ScreenshotOptions>{
-      captureBeyondViewport: true,
-      fromSurface: true,
-      clip: boundingBox,
-    })
+    if (type === "svg") {
+      // For SVG, we'll capture the entire webpage as an image first, then embed it in SVG
+      try {
+        // First, capture the entire page as a PNG image
+        const fullPageImage = await webPage.screenshot({
+          captureBeyondViewport: true,
+          fromSurface: true,
+          fullPage: true,
+          type: 'png'
+        });
 
-    response.contentType("image/png")
-    response.send(png)
+        // Convert the PNG to base64
+        const base64Image = fullPageImage.toString('base64');
+        const dataUrl = `data:image/png;base64,${base64Image}`;
+
+        // Get page dimensions
+        const pageDimensions = await webPage.evaluate(() => {
+          const body = document.body;
+          const rect = body.getBoundingClientRect();
+          const width = Math.max(rect.width, window.innerWidth);
+          const height = Math.max(rect.height, document.documentElement.scrollHeight);
+          return { width, height };
+        });
+
+        // Create SVG wrapper with the embedded image
+        const svgContent = `<svg width="${pageDimensions.width}" height="${pageDimensions.height}" xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink">
+          <image width="100%" height="100%" href="${dataUrl}" preserveAspectRatio="xMidYMid meet"/>
+        </svg>`;
+
+        response.contentType("image/svg+xml");
+        response.send(svgContent);
+      } catch (error) {
+        console.error("Error generating SVG:", error);
+        response.status(500).send("Internal Server Error");
+      }
+    } else {
+      // For other image types (png, jpeg, webp)
+      const imageOptions: ScreenshotOptions = {
+        captureBeyondViewport: true,
+        fromSurface: true,
+        clip: boundingBox,
+      };
+
+      // Set the type for the screenshot
+      if (type === "jpeg") {
+        imageOptions.type = "jpeg";
+        imageOptions.quality = 90; // High quality JPEG
+      } else if (type === "webp") {
+        imageOptions.type = "webp";
+        imageOptions.quality = 90; // High quality WebP
+      }
+
+      const image = await webPage.screenshot(imageOptions);
+
+      // Set appropriate content type
+      const contentType = type === "jpeg" ? "image/jpeg" : 
+                         type === "webp" ? "image/webp" : "image/png";
+      
+      response.contentType(contentType);
+      response.send(image);
+    }
   } catch (error) {
     console.error("Error generating image:", error);
     response.status(500).send("Internal Server Error");

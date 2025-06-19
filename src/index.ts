@@ -90,6 +90,8 @@ app.get("/image", async (request, response) => {
   const url: string = request.query.url as string
   const type: string = request.query.type as string
   const types = ["png", "jpeg", "webp", "svg"]
+  const download: boolean = request.query.download === "true";
+  const filename: string = request.query.filename as string || "screenshot";
 
   if (!types.includes(type)) {
     response.status(400).json({ message: "Supported types are png, jpeg, webp or svg" });
@@ -163,8 +165,14 @@ app.get("/image", async (request, response) => {
           type: 'png'
         });
 
-        // Convert the PNG to base64
+        // Convert the PNG to base64 - ensure we get the full data
         const base64Image = fullPageImage.toString('base64');
+        
+        // Verify base64 data is complete
+        if (!base64Image || base64Image.length < 100) {
+          throw new Error('Failed to generate valid image data');
+        }
+        
         const dataUrl = `data:image/png;base64,${base64Image}`;
 
         // Get page dimensions
@@ -176,12 +184,44 @@ app.get("/image", async (request, response) => {
           return { width, height };
         });
 
-        // Create SVG wrapper with the embedded image
-        const svgContent = `<svg width="${pageDimensions.width}" height="${pageDimensions.height}" xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink">
-          <image width="100%" height="100%" href="${dataUrl}" preserveAspectRatio="xMidYMid meet"/>
-        </svg>`;
+        // Create SVG wrapper with the embedded image and proper metadata
+        const svgContent = `<?xml version="1.0" encoding="UTF-8"?>
+<svg width="${pageDimensions.width}" height="${pageDimensions.height}" 
+     xmlns="http://www.w3.org/2000/svg" 
+     xmlns:xlink="http://www.w3.org/1999/xlink"
+     version="1.1">
+  <title>Webpage Screenshot</title>
+  <desc>SVG containing webpage screenshot from ${url}</desc>
+  <metadata>
+    <rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#"
+             xmlns:dc="http://purl.org/dc/elements/1.1/">
+      <rdf:Description>
+        <dc:title>Webpage Screenshot</dc:title>
+        <dc:description>SVG format webpage screenshot</dc:description>
+        <dc:format>image/svg+xml</dc:format>
+        <dc:source>${url}</dc:source>
+      </rdf:Description>
+    </rdf:RDF>
+  </metadata>
+  <image width="100%" height="100%" href="${dataUrl}" preserveAspectRatio="xMidYMid meet" image-rendering="auto"/>
+</svg>`;
 
-        response.contentType("image/svg+xml");
+        // Set response headers to ensure browser recognizes it as SVG and handles saving correctly
+        response.setHeader('Content-Type', 'image/svg+xml; charset=utf-8');
+        
+        if (download) {
+          response.setHeader('Content-Disposition', `attachment; filename="${filename}.svg"`);
+        } else {
+          response.setHeader('Content-Disposition', `inline; filename="${filename}.svg"`);
+        }
+        
+        response.setHeader('X-Content-Type-Options', 'nosniff');
+        response.setHeader('Cache-Control', 'no-cache');
+        
+        // Add content length for better browser handling
+        const contentLength = Buffer.byteLength(svgContent, 'utf8');
+        response.setHeader('Content-Length', contentLength);
+        
         response.send(svgContent);
       } catch (error) {
         console.error("Error generating SVG:", error);
@@ -210,7 +250,13 @@ app.get("/image", async (request, response) => {
       const contentType = type === "jpeg" ? "image/jpeg" : 
                          type === "webp" ? "image/webp" : "image/png";
       
-      response.contentType(contentType);
+      response.setHeader('Content-Type', contentType);
+      
+      if (download) {
+        response.setHeader('Content-Disposition', `attachment; filename="${filename}.${type}"`);
+        response.setHeader('Content-Length', image.length);
+      }
+      
       response.send(image);
     }
   } catch (error) {

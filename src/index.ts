@@ -6,6 +6,9 @@ import environments from "./utils/environments"
 import { ScreenshotOptions } from "puppeteer"
 import { PaperFormat } from "puppeteer"
 import cors from 'cors';
+import HTMLtoDOCX from "@turbodocx/html-to-docx"
+import { extractDocumentHtml } from "./docx/extract"
+import { NO_BORDER_COLOR, contentWidthPx, finalizeDocument, pageSetupFor } from "./docx/document"
 
 const app = express()
 
@@ -75,6 +78,135 @@ app.get("/pdf", async (request, response) => {
     } else {
       response.contentType("application/pdf")
       response.send(pdf)
+    }
+  } catch (error) {
+    console.error(error)
+    response.status(500).json({ message: "Internal Server Error" })
+  } finally {
+    if (browser) {
+      await browser.close()
+    }
+  }
+})
+
+app.get("/docx", async (request, response) => {
+  const url: string = request.query.url as string
+  const filename: string = request.query.filename as string || "document"
+  const download: boolean = request.query.download === "true";
+  const orientation = request.query.orientation === "landscape" ? "landscape" : "portrait"
+  const pageSetup = pageSetupFor(request.query.format as string | undefined, orientation)
+
+  let browser;
+
+  try {
+    // Create an instance of the chrome browser
+    // But disable headless mode !
+    browser = await puppeteer.launch({
+      headless: true,
+    });
+
+    // Create a new page
+    const webPage = await browser.newPage();
+
+    // Render at a fixed desktop width so charts size consistently,
+    // at 2x scale so embedded images stay sharp in Word
+    await webPage.setViewport({ width: 1056, height: 800, deviceScaleFactor: 2 })
+
+    // Configure the navigation timeout
+    await webPage.setDefaultNavigationTimeout(0);
+
+    // Navigate to website
+    await webPage
+      .goto(url, {
+        waitUntil: "networkidle0",
+      })
+      .catch((err) => console.log("error loading url", err))
+
+    await webPage.waitForNetworkIdle();
+
+    // wait by blocking execution flow
+
+    await new Promise((resolve) => setTimeout(resolve, 5000))
+
+    // match what the PDF export shows: print stylesheets hide page chrome
+    await webPage.emulateMediaType("print")
+
+    // Word cannot render live charts: snapshot each chart element as PNG
+    // and swap it for a plain <img> of the same on-page size
+    let chartHandles = await webPage.$$("[data-highcharts-chart]")
+    if (chartHandles.length === 0) {
+      chartHandles = await webPage.$$(".highcharts-container")
+    }
+
+    for (const chartHandle of chartHandles) {
+      const shot = await chartHandle.screenshot({ type: "png" })
+      const dataUri = `data:image/png;base64,${Buffer.from(shot).toString("base64")}`
+
+      await chartHandle.evaluate((el, src) => {
+        const img = document.createElement("img")
+        img.setAttribute("src", src)
+        img.setAttribute("width", String(el.clientWidth))
+        img.setAttribute("height", String(el.clientHeight))
+        el.replaceWith(img)
+      }, dataUri)
+    }
+
+    // remote images (avatars, logos) are embedded the same way so the
+    // document never depends on fetching them later
+    const imageHandles = await webPage.$$("img:not([src^='data:'])")
+    for (const imageHandle of imageHandles) {
+      const box = await imageHandle.boundingBox()
+      if (!box || box.width < 24 || box.height < 24) continue
+      try {
+        const shot = await imageHandle.screenshot({ type: "png" })
+        const dataUri = `data:image/png;base64,${Buffer.from(shot).toString("base64")}`
+        await imageHandle.evaluate((el, src) => el.setAttribute("src", src), dataUri)
+      } catch (error) {
+        console.log("skipping image", error)
+      }
+    }
+
+    // Rebuild the page as document HTML, preserving the rendered layout
+    const html: string = await webPage.evaluate(extractDocumentHtml, {
+      contentWidth: contentWidthPx(pageSetup),
+      noBorderColor: NO_BORDER_COLOR,
+    })
+
+    const converted = await HTMLtoDOCX(html, null, {
+      title: filename,
+      creator: "muppeteer",
+      orientation,
+      pageSize: { width: pageSetup.width, height: pageSetup.height },
+      margins: {
+        top: pageSetup.margin,
+        right: pageSetup.margin,
+        bottom: pageSetup.margin,
+        left: pageSetup.margin,
+      },
+      font: "Calibri",
+      table: {
+        row: { cantSplit: false },
+        borderOptions: { size: 4, stroke: "single", color: "DDDDDD" },
+      },
+      footer: true,
+      pageNumber: true,
+    }) as Buffer
+
+    const fileBuffer = await finalizeDocument(converted)
+
+    const contentType = "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+
+    if (download) {
+      response.writeHead(200, {
+        "Content-Type": contentType,
+        "Content-Disposition": `attachment; filename="${filename}.docx"`,
+        "Content-Length": fileBuffer.length,
+      });
+
+      response.end(fileBuffer);
+    } else {
+      response.contentType(contentType)
+      response.send(fileBuffer)
     }
   } catch (error) {
     console.error(error)

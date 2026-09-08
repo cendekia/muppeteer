@@ -19,6 +19,7 @@ Install muppeteer with npm
 
 - [x] Add servive for saving url to pdf file
 - [x] Add service for saving url to png, jpeg and webp file
+- [x] Add service for saving url to docx file (charts embedded as images)
 - [ ] TBD
 
 ## Contributing

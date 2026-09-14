@@ -107,6 +107,62 @@ const clearSentinelBorders = (doc: XmlDocument) => {
 /** default spacing after paragraphs, in TWIP: the page is denser than Word's default */
 const PARAGRAPH_SPACING_AFTER = 60
 
+/** a paragraph this short in front of a table or picture is a caption or sub-title */
+const CAPTION_MAX_CHARS = 120
+
+const paragraphText = (paragraph: XmlElement): string =>
+  Array.from(paragraph.getElementsByTagName("w:t"))
+    .map((text) => text.textContent || "")
+    .join("")
+
+const isHeading = (paragraph: XmlElement): boolean => {
+  const props = childElements(paragraph, "w:pPr")[0]
+  const style = props && childElements(props, "w:pStyle")[0]
+  return !!style && /^Heading\d$/.test(style.getAttribute("w:val") || "")
+}
+
+const nextElementSibling = (node: XmlNode): XmlElement | null => {
+  let sibling = node.nextSibling
+  while (sibling && sibling.nodeType !== 1) sibling = sibling.nextSibling
+  return sibling as XmlElement | null
+}
+
+const setKeepNext = (doc: XmlDocument, paragraph: XmlElement) => {
+  let props = childElements(paragraph, "w:pPr")[0]
+  if (!props) {
+    props = doc.createElementNS(WORD_NS, "w:pPr")
+    paragraph.insertBefore(props, paragraph.firstChild)
+  }
+  if (childElements(props, "w:keepNext").length) return
+  const keepNext = doc.createElementNS(WORD_NS, "w:keepNext")
+  // schema order: pStyle comes first, keepNext right after it
+  const style = childElements(props, "w:pStyle")[0]
+  if (style && style.nextSibling) props.insertBefore(keepNext, style.nextSibling)
+  else if (style) props.appendChild(keepNext)
+  else props.insertBefore(keepNext, props.firstChild)
+}
+
+/**
+ * The page keeps each section on one sheet; Word has no such notion, so
+ * headings, and short sub-titles standing right before a table or a
+ * picture, are told to stay with what follows them.
+ */
+const keepTitlesWithContent = (doc: XmlDocument) => {
+  Array.from(doc.getElementsByTagName("w:p")).forEach((paragraph) => {
+    if (isHeading(paragraph)) {
+      setKeepNext(doc, paragraph)
+      return
+    }
+    const next = nextElementSibling(paragraph)
+    if (!next) return
+    const beforeTable = next.nodeName === "w:tbl"
+    const beforePicture = next.nodeName === "w:p" && next.getElementsByTagName("w:drawing").length > 0
+    if (!beforeTable && !beforePicture) return
+    const text = paragraphText(paragraph).trim()
+    if (text && text.length <= CAPTION_MAX_CHARS) setKeepNext(doc, paragraph)
+  })
+}
+
 export async function finalizeDocument(docx: Buffer): Promise<Buffer> {
   const zip = await JSZip.loadAsync(docx)
   const documentFile = zip.file("word/document.xml")
@@ -115,6 +171,7 @@ export async function finalizeDocument(docx: Buffer): Promise<Buffer> {
   const doc = new DOMParser().parseFromString(await documentFile.async("string"), "application/xml")
   Array.from(doc.getElementsByTagName("w:tbl")).forEach((table) => pinTableLayout(doc, table))
   clearSentinelBorders(doc)
+  keepTitlesWithContent(doc)
   zip.file("word/document.xml", new XMLSerializer().serializeToString(doc))
 
   const stylesFile = zip.file("word/styles.xml")

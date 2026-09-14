@@ -83,6 +83,16 @@ export function extractDocumentHtml(options: ExtractOptions): string {
     el.tagName === "BR" ||
     (!/^H[1-6]$/.test(el.tagName) && INLINE_DISPLAYS.includes(getComputedStyle(el).display))
 
+  // thin decorations (accent bars, hairline dividers) carry no content and
+  // would otherwise become their own table cells beside real content
+  const isDecoration = (el: HTMLElement): boolean => {
+    if (el.tagName === "IMG") return false
+    const rect = el.getBoundingClientRect()
+    if (rect.width > 12 && rect.height > 12) return false
+    if ((el.innerText || "").trim()) return false
+    return el.querySelector("img") === null
+  }
+
   // small shaped labels (engagement pills, tags) read as inline badges even
   // when a flex container lays them out as blocks
   const isBadge = (el: Element): boolean => {
@@ -341,15 +351,21 @@ export function extractDocumentHtml(options: ExtractOptions): string {
   }
 
   // side-by-side siblings become one table row. Gaps next to cards stay
-  // visible as spacer cells; gaps between plain blocks widen the text cell
-  const renderRow = (row: Item[], avail: number): string => {
+  // visible as spacer cells; gaps between plain blocks widen the text cell.
+  // `leading` is the space before the first item, kept so a lone centered
+  // item does not slide to the left edge
+  const renderRow = (row: Item[], avail: number, leading = 0): string => {
     type Slot = { item: Item | null; width: number }
     const slots: Slot[] = []
+    if (leading > 4) slots.push({ item: null, width: leading })
     row.forEach((item, index) => {
       const isCard = cardStyle(item.el) !== null
-      const width = isBadge(item.el)
-        ? Math.round(item.rect.width * scale) + CELL_MARGIN + 4
-        : Math.round(item.rect.width * scale)
+      // badges and images must keep their rendered size once the cell's
+      // inner margin is taken off, so the margin is added to their slot
+      const width =
+        isBadge(item.el) || item.el.tagName === "IMG"
+          ? Math.round(item.rect.width * scale) + CELL_MARGIN + 4
+          : Math.round(item.rect.width * scale)
       if (index > 0) {
         const previous = row[index - 1]
         const gap = Math.round((item.rect.left - previous.rect.right) * scale)
@@ -382,8 +398,54 @@ export function extractDocumentHtml(options: ExtractOptions): string {
         return joined + separator + part
       }, "")
 
-  const renderBlocks = (blocks: HTMLElement[], avail: number): string => {
+  // a small icon or a short run of text with no block structure of its own
+  const isCompact = (item: Item): boolean => {
+    const { el, rect } = item
+    if (el.tagName === "IMG") return rect.width <= 64 && rect.height <= 64
+    if (rect.height > 64 || cardStyle(el) !== null || isBadge(el)) return false
+    return el.querySelector("table, ul, ol, img") === null
+  }
+
+  // a row of compact items sitting next to each other (an icon beside a
+  // number, a bullet beside a label) reads as one line of text, not a table
+  const isCompactRow = (row: Item[], avail: number): boolean => {
+    if (row.length < 2 || !row.every(isCompact)) return false
+    for (let index = 1; index < row.length; index++) {
+      if ((row[index].rect.left - row[index - 1].rect.right) * scale > 12) return false
+    }
+    // a wide text-only row is a layout of columns, not a line; a figure
+    // beside its icon may fill a narrow card almost entirely
+    const span = (row[row.length - 1].rect.right - row[0].rect.left) * scale
+    const hasImage = row.some((item) => item.el.tagName === "IMG")
+    return span <= avail * (hasImage ? 0.95 : 0.6)
+  }
+
+  // where a flex/grid container places its content; falls back to text-align
+  const contentAlignment = (container: HTMLElement): string => {
+    const style = getComputedStyle(container)
+    if (style.display.includes("flex") || style.display.includes("grid")) {
+      const justify = style.justifyContent
+      if (justify === "center" || justify === "space-around" || justify === "space-evenly") return "center"
+      if (justify === "flex-end" || justify === "end" || justify === "right") return "right"
+      if (justify !== "normal" && justify !== "flex-start" && justify !== "start" && justify !== "left") return "left"
+    }
+    return alignmentOf(container)
+  }
+
+  const renderCompactRow = (row: Item[], container: HTMLElement): string => {
+    const parts = row.map((item) =>
+      item.el.tagName === "IMG"
+        ? renderImage(item.el as HTMLImageElement)
+        : renderInlineNode(item.el).trim()
+    )
+    const inner = parts.filter(Boolean).join(" ")
+    return inner ? `<p style="text-align:${contentAlignment(container)};">${inner}</p>` : ""
+  }
+
+  const renderBlocks = (blocks: HTMLElement[], avail: number, container: HTMLElement): string => {
     const items: Item[] = blocks.map((el) => ({ el, rect: el.getBoundingClientRect() }))
+    const containerStyle = getComputedStyle(container)
+    const contentLeft = container.getBoundingClientRect().left + parseFloat(containerStyle.paddingLeft)
     const rows: Item[][] = []
     items.forEach((item) => {
       const current = rows[rows.length - 1]
@@ -399,7 +461,16 @@ export function extractDocumentHtml(options: ExtractOptions): string {
       }
       rows.push([item])
     })
-    return joinBlocks(rows.map((row) => (row.length > 1 ? renderRow(row, avail) : renderBlock(row[0].el, avail))))
+    return joinBlocks(
+      rows.map((row) => {
+        if (isCompactRow(row, avail)) return renderCompactRow(row, container)
+        const leading = Math.round((row[0].rect.left - contentLeft) * scale)
+        if (row.length > 1) return renderRow(row, avail, leading)
+        // a lone block placed away from the left edge (a centered card) keeps its offset
+        if (leading > 4 && cardStyle(row[0].el) !== null) return renderRow(row, avail, leading)
+        return renderBlock(row[0].el, avail)
+      })
+    )
   }
 
   // walks a container: inline runs become paragraphs, block children are
@@ -413,7 +484,7 @@ export function extractDocumentHtml(options: ExtractOptions): string {
       inlineNodes = []
     }
     const flushBlocks = () => {
-      if (blockElements.length) output.push(renderBlocks(blockElements, avail))
+      if (blockElements.length) output.push(renderBlocks(blockElements, avail, el))
       blockElements = []
     }
 
@@ -436,7 +507,7 @@ export function extractDocumentHtml(options: ExtractOptions): string {
         inlineNodes.push(child)
         return
       }
-      if (!isVisible(child)) return
+      if (!isVisible(child) || isDecoration(child)) return
       flushInline()
       blockElements.push(child)
     })

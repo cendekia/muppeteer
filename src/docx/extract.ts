@@ -352,9 +352,11 @@ export function extractDocumentHtml(options: ExtractOptions): string {
 
   // side-by-side siblings become one table row. Gaps next to cards stay
   // visible as spacer cells; gaps between plain blocks widen the text cell.
-  // `leading` is the space before the first item, kept so a lone centered
-  // item does not slide to the left edge
-  const renderRow = (row: Item[], avail: number, leading = 0): string => {
+  // `leading` and `trailing` are the space before the first item and after
+  // the last one. Word centers every table, so a row placed away from the
+  // left edge keeps its position only when both sides are padded out to the
+  // container's width
+  const renderRow = (row: Item[], avail: number, leading = 0, trailing = 0): string => {
     type Slot = { item: Item | null; width: number }
     const slots: Slot[] = []
     if (leading > 4) slots.push({ item: null, width: leading })
@@ -380,6 +382,7 @@ export function extractDocumentHtml(options: ExtractOptions): string {
       }
       slots.push({ item, width })
     })
+    if (leading > 4 && trailing > 4) slots.push({ item: null, width: trailing })
     const widths = fitWidths(slots.map((slot) => slot.width), avail)
     const cells = slots.map((slot, index) =>
       slot.item
@@ -445,7 +448,9 @@ export function extractDocumentHtml(options: ExtractOptions): string {
   const renderBlocks = (blocks: HTMLElement[], avail: number, container: HTMLElement): string => {
     const items: Item[] = blocks.map((el) => ({ el, rect: el.getBoundingClientRect() }))
     const containerStyle = getComputedStyle(container)
-    const contentLeft = container.getBoundingClientRect().left + parseFloat(containerStyle.paddingLeft)
+    const containerRect = container.getBoundingClientRect()
+    const contentLeft = containerRect.left + parseFloat(containerStyle.paddingLeft)
+    const contentRight = containerRect.right - parseFloat(containerStyle.paddingRight)
     const rows: Item[][] = []
     items.forEach((item) => {
       const current = rows[rows.length - 1]
@@ -465,9 +470,10 @@ export function extractDocumentHtml(options: ExtractOptions): string {
       rows.map((row) => {
         if (isCompactRow(row, avail)) return renderCompactRow(row, container)
         const leading = Math.round((row[0].rect.left - contentLeft) * scale)
-        if (row.length > 1) return renderRow(row, avail, leading)
+        const trailing = Math.round((contentRight - row[row.length - 1].rect.right) * scale)
+        if (row.length > 1) return renderRow(row, avail, leading, trailing)
         // a lone block placed away from the left edge (a centered card) keeps its offset
-        if (leading > 4 && cardStyle(row[0].el) !== null) return renderRow(row, avail, leading)
+        if (leading > 4 && cardStyle(row[0].el) !== null) return renderRow(row, avail, leading, trailing)
         return renderBlock(row[0].el, avail)
       })
     )

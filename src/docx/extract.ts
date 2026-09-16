@@ -200,9 +200,13 @@ export function extractDocumentHtml(options: ExtractOptions): string {
     const colorCss = color ? `color:#${toHex(blend(color, backgroundBehind(textSource)))};` : ""
     const align = `text-align:${alignmentOf(heading)};`
     if (cellDepth > 0) {
-      // inside cells the heading style is lost, so spell the look out on the run
+      // inside cells the heading style is lost, so spell the look out on the
+      // run, weight included: a heading the page draws at a normal weight must
+      // not come out bold just because it stands alone in its cell
       const size = Math.min(Math.round(parseFloat(style.fontSize) || 16), MAX_FONT_PX)
-      return `<p style="${align}"><strong><span style="font-size:${size}px;${colorCss}">${escapeHtml(text)}</span></strong></p>`
+      const run = `<span style="font-size:${size}px;${colorCss}">${escapeHtml(text)}</span>`
+      const inner = parseInt(style.fontWeight, 10) >= 600 ? `<strong>${run}</strong>` : run
+      return `<p style="${align}">${inner}</p>`
     }
     return `<h${level} style="${colorCss}${align}">${escapeHtml(text)}</h${level}>`
   }

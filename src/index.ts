@@ -1,5 +1,5 @@
 import express from "express"
-import puppeteer from "puppeteer"
+import { Page } from "puppeteer"
 import * as dotenv from "dotenv"
 dotenv.config()
 import environments from "./utils/environments"
@@ -9,13 +9,14 @@ import cors from 'cors';
 import HTMLtoDOCX from "@turbodocx/html-to-docx"
 import { extractDocumentHtml } from "./docx/extract"
 import { NO_BORDER_COLOR, contentWidthPx, finalizeDocument, pageSetupFor } from "./docx/document"
+import { acquirePage, closeBrowser, queueStatus, releasePage } from "./browser"
 
 const app = express()
 
 app.use(cors({ origin: '*' }));
 
 app.get("/", (request, response) => {
-  response.json({ message: "Hello Elmo!" })
+  response.json({ message: "Hello Elmo!", renders: queueStatus() })
 })
 
 app.get("/pdf", async (request, response) => {
@@ -26,17 +27,11 @@ app.get("/pdf", async (request, response) => {
   const filename: string = request.query.filename as string || "document";
   const download: boolean = request.query.download === "true";
 
-  let browser;
+  let webPage: Page | undefined
 
   try {
-    // Create an instance of the chrome browser
-    // But disable headless mode !
-    browser = await puppeteer.launch({
-      headless: true,
-    });
-
-    // Create a new page
-    const webPage = await browser.newPage();
+    // Wait for a render slot and open a page on the shared browser
+    webPage = await acquirePage()
 
     // Configure the navigation timeout
     await webPage.setDefaultNavigationTimeout(0);
@@ -48,7 +43,10 @@ app.get("/pdf", async (request, response) => {
       })
       .catch((err) => console.log("error loading url", err))
 
-    await webPage.waitForNetworkIdle();
+    // pages with sockets or polling never go idle: render anyway after the limit
+    await webPage
+      .waitForNetworkIdle({ idleTime: 500, timeout: environments.networkIdleTimeoutMs })
+      .catch((err) => console.log("network did not go idle, continuing", err.message))
 
     // wait by blocking execution flow
 
@@ -83,8 +81,8 @@ app.get("/pdf", async (request, response) => {
     console.error(error)
     response.status(500).json({ message: "Internal Server Error" })
   } finally {
-    if (browser) {
-      await browser.close()
+    if (webPage) {
+      await releasePage(webPage)
     }
   }
 })
@@ -96,17 +94,11 @@ app.get("/docx", async (request, response) => {
   const orientation = request.query.orientation === "landscape" ? "landscape" : "portrait"
   const pageSetup = pageSetupFor(request.query.format as string | undefined, orientation)
 
-  let browser;
+  let webPage: Page | undefined
 
   try {
-    // Create an instance of the chrome browser
-    // But disable headless mode !
-    browser = await puppeteer.launch({
-      headless: true,
-    });
-
-    // Create a new page
-    const webPage = await browser.newPage();
+    // Wait for a render slot and open a page on the shared browser
+    webPage = await acquirePage()
 
     // Render at a fixed desktop width so charts size consistently,
     // at 2x scale so embedded images stay sharp in Word
@@ -122,7 +114,10 @@ app.get("/docx", async (request, response) => {
       })
       .catch((err) => console.log("error loading url", err))
 
-    await webPage.waitForNetworkIdle();
+    // pages with sockets or polling never go idle: render anyway after the limit
+    await webPage
+      .waitForNetworkIdle({ idleTime: 500, timeout: environments.networkIdleTimeoutMs })
+      .catch((err) => console.log("network did not go idle, continuing", err.message))
 
     // wait by blocking execution flow
 
@@ -212,8 +207,8 @@ app.get("/docx", async (request, response) => {
     console.error(error)
     response.status(500).json({ message: "Internal Server Error" })
   } finally {
-    if (browser) {
-      await browser.close()
+    if (webPage) {
+      await releasePage(webPage)
     }
   }
 })
@@ -230,16 +225,10 @@ app.get("/image", async (request, response) => {
     return;
   }
 
-  let browser;
+  let webPage: Page | undefined
   try {
-    // Create an instance of the chrome browser
-    // But disable headless mode !
-    browser = await puppeteer.launch({
-      headless: true,
-    })
-
-    // Create a new page
-    const webPage = await browser.newPage()
+    // Wait for a render slot and open a page on the shared browser
+    webPage = await acquirePage()
 
     // Configure the navigation timeout
     webPage.setDefaultNavigationTimeout(0)
@@ -251,7 +240,10 @@ app.get("/image", async (request, response) => {
       })
       .catch((err) => console.log("error loading url", err))
 
-    await webPage.waitForNetworkIdle();
+    // pages with sockets or polling never go idle: render anyway after the limit
+    await webPage
+      .waitForNetworkIdle({ idleTime: 500, timeout: environments.networkIdleTimeoutMs })
+      .catch((err) => console.log("network did not go idle, continuing", err.message))
 
     // wait by blocking execution flow
     await new Promise((resolve) => setTimeout(resolve, 5000))
@@ -395,12 +387,21 @@ app.get("/image", async (request, response) => {
     console.error("Error generating image:", error);
     response.status(500).send("Internal Server Error");
   } finally {
-    if (browser) {
-      await browser.close();
+    if (webPage) {
+      await releasePage(webPage)
     }
   }
 })
 
-app.listen(environments.apiPort, () => {
+const server = app.listen(environments.apiPort, () => {
   console.log(`Server is running on: ${environments.apiPort}`)
 })
+
+const shutdown = async (signal: string) => {
+  console.log(`${signal} received, closing browser`)
+  await closeBrowser()
+  server.close(() => process.exit(0))
+}
+
+process.on("SIGTERM", () => void shutdown("SIGTERM"))
+process.on("SIGINT", () => void shutdown("SIGINT"))
